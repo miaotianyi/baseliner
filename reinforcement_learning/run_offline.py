@@ -7,9 +7,8 @@ Usually, the deployed agent cannot access an encapsulated `env.step` function.
 
 The agent must be stateful (keep track of observation/action state)
 
-We use `gamma` for the MDP discount factor,
-since `lambda` is reserved for lambda functions in Python.
-
+We use `gamma` for the MDP discount factor
+and `gae_lambda` for the GAE discount factor.
 """
 
 import gymnasium as gym
@@ -17,7 +16,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 from torch import nn, optim
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import TensorDataset, DataLoader, Dataset
 from torch.distributions import Categorical
 
 
@@ -37,24 +36,34 @@ class DummyAgent:
             pass
 
 
-def gae_advantages(rewards: torch.Tensor, critic_values: torch.Tensor, gamma: float, gae_lambda: float):
-    # Single trajectory generalized advantage estimation
-    # Without gradients, compute a list of advantage based on
-    # estimated values and rewards per timestep.
-    # rewards, critic_values should have the same length n (the last terminal state is excluded)
-    # it's better to calculate the entire thing in CPU
-    with torch.no_grad():
-        n_steps = len(rewards)
-        old_device = rewards.device
-        # rewards = torch.tensor(rewards, device="cpu")
-        rewards = rewards.detach().clone().cpu()
-        critic_values = critic_values.detach().clone().cpu()
-        advantages = torch.zeros(n_steps, device="cpu")
-        advantages[-1] = rewards[-1] - critic_values[-1]
-        for t in reversed(range(n_steps-1)):    # from n_steps-2 to 0 inclusive
-            delta = rewards[t] + gamma * critic_values[t + 1] - critic_values[t]
-            advantages[t] = delta + gamma * gae_lambda * advantages[t + 1]
-        return advantages.to(device=old_device)
+def gae(rewards: np.ndarray, critic_values: np.ndarray, gamma: float, gae_lambda: float):
+    n_steps = len(rewards)
+    advantages = np.zeros(n_steps)
+    advantages[-1] = rewards[-1] - critic_values[-1]
+    for t in reversed(range(n_steps - 1)):  # from n_steps-2 to 0 inclusive
+        delta = rewards[t] + gamma * critic_values[t + 1] - critic_values[t]
+        advantages[t] = delta + gamma * gae_lambda * advantages[t + 1]
+    return advantages
+
+
+# def gae_advantages(rewards: torch.Tensor, critic_values: torch.Tensor, gamma: float, gae_lambda: float):
+#     # Single trajectory generalized advantage estimation
+#     # Without gradients, compute a list of advantage based on
+#     # estimated values and rewards per timestep.
+#     # rewards, critic_values should have the same length n (the last terminal state is excluded)
+#     # it's better to calculate the entire thing in CPU
+#     with torch.no_grad():
+#         n_steps = len(rewards)
+#         old_device = rewards.device
+#         # rewards = torch.tensor(rewards, device="cpu")
+#         rewards = rewards.detach().clone().cpu()
+#         critic_values = critic_values.detach().clone().cpu()
+#         advantages = torch.zeros(n_steps, device="cpu")
+#         advantages[-1] = rewards[-1] - critic_values[-1]
+#         for t in reversed(range(n_steps-1)):    # from n_steps-2 to 0 inclusive
+#             delta = rewards[t] + gamma * critic_values[t + 1] - critic_values[t]
+#             advantages[t] = delta + gamma * gae_lambda * advantages[t + 1]
+#         return advantages.to(device=old_device)
 
 
 class VPG:
@@ -94,35 +103,91 @@ class VPG:
             action = Categorical(logits=action_logits).sample().item()
         return action
 
+    def collate(self, episodes):
+        """
+        Collate a list of episodes into a single dataset.
+
+        Parameters
+        ----------
+        episodes : list of tuple
+            Each episode is a (observation_list, action_list, reward_list) tuple.
+
+        Returns
+        -------
+        Dataset
+            Can generate (observation, action, advantage) batches.
+        """
+        # Every observation has the same shape
+        # (if not, extra processing is required)
+        all_obs = []
+        # Every action has the same shape
+        all_act = []
+        # Every reward (scalar) has the same shape,
+        # but advantage is computed relative to one episode,
+        # so it must be preprocessed before adding to the list
+        all_adv = []
+        for obs_list, act_list, reward_list in episodes:
+            # in rare cases, the last state in truncated cases is
+            n_steps = len(reward_list)
+            all_obs.extend(obs_list[:n_steps])
+            all_act.extend(act_list)
+            # critic_values=0.0 with gae_lambda=1.0 is equivalent to Monte-carlo estimate
+            all_adv.append(gae(
+                rewards=np.array(reward_list), critic_values=np.zeros(n_steps),
+                gamma=self.gamma, gae_lambda=1.0)
+            )
+        # start collating
+        all_obs = np.array(all_obs)
+        all_act = np.array(all_act)
+        all_adv = np.hstack(all_adv)
+
+        dataset = TensorDataset(
+            torch.tensor(all_obs),
+            torch.tensor(all_act),
+            torch.tensor(all_adv)
+        )
+        return dataset
+
     def learn(self, episodes):
-        for i, (obs_list, act_list, reward_list) in enumerate(episodes):
-            obs_list = np.array(obs_list)
-            act_list = np.array(act_list)
-            reward_list = np.array(reward_list)
-            obs_tensor = torch.tensor(obs_list, dtype=torch.float32)
-            act_tensor = torch.tensor(act_list, dtype=torch.long)
-            reward_tensor = torch.tensor(reward_list, dtype=torch.float32)
+        dataset = self.collate(episodes)
+        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        for obs_batch, act_batch, reward_batch in dataloader:
+            action_logits = self.policy_net(obs_batch)
+            log_probs = Categorical(logits=action_logits).log_prob(act_batch)
+            policy_loss = -(log_probs * reward_batch).mean()
+            policy_loss.backward()
+            self.optimizer.step()
+            self.optimizer.zero_grad()
 
-            adv_tensor = gae_advantages(rewards=reward_tensor, critic_values=torch.zeros_like(reward_tensor), gamma=self.gamma, gae_lambda=1.0)
+    # def learn(self, episodes):
+    #     for i, (obs_list, act_list, reward_list) in enumerate(episodes):
+    #         obs_list = np.array(obs_list)
+    #         act_list = np.array(act_list)
+    #         reward_list = np.array(reward_list)
+    #         obs_tensor = torch.tensor(obs_list, dtype=torch.float32)
+    #         act_tensor = torch.tensor(act_list, dtype=torch.long)
+    #         reward_tensor = torch.tensor(reward_list, dtype=torch.float32)
+    #
+    #         adv_tensor = gae_advantages(rewards=reward_tensor, critic_values=torch.zeros_like(reward_tensor), gamma=self.gamma, gae_lambda=1.0)
+    #
+    #         dataset = TensorDataset(obs_tensor, act_tensor, adv_tensor)
+    #         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+    #
+    #         for obs_batch, act_batch, reward_batch in dataloader:
+    #             action_logits = self.policy_net(obs_batch)
+    #             log_probs = Categorical(logits=action_logits).log_prob(act_batch)
+    #             # action_probs = self.policy_net(obs_batch)  # [batch_size, 1]
+    #             # log_probs = Categorical(action_probs).log_prob(act_batch)
+    #             # log_probs = torch.log(torch.gather(action_probs, 1, act_batch.unsqueeze(1))).squeeze()
+    #             # print((log_probs_other - log_probs).abs().mean())
+    #             policy_loss = -(log_probs * reward_batch).mean()
+    #
+    #             policy_loss.backward()
+    #             self.optimizer.step()
+    #             self.optimizer.zero_grad()
 
-            dataset = TensorDataset(obs_tensor, act_tensor, adv_tensor)
-            dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
-            for obs_batch, act_batch, reward_batch in dataloader:
-                action_logits = self.policy_net(obs_batch)
-                log_probs = Categorical(logits=action_logits).log_prob(act_batch)
-                # action_probs = self.policy_net(obs_batch)  # [batch_size, 1]
-                # log_probs = Categorical(action_probs).log_prob(act_batch)
-                # log_probs = torch.log(torch.gather(action_probs, 1, act_batch.unsqueeze(1))).squeeze()
-                # print((log_probs_other - log_probs).abs().mean())
-                policy_loss = -(log_probs * reward_batch).mean()
-
-                policy_loss.backward()
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-
-
-def run_offline(env, agent, episodes_per_learn=1000, max_frames=100000, ):
+def run_offline(env, agent, episodes_per_learn=1000, max_frames=100000):
     last_n_rewards = []
 
     episodes = []
@@ -173,7 +238,7 @@ def run_cart_pole(visualize=True):
                 action_dim=env.action_space.n,
                 gamma=1.0,
                 learning_rate=3e-3,
-                batch_size=64)
+                batch_size=128)
 
     # agent = DummyAgent(action_func=lambda: np.random.randint(0, env.action_space.n))
 
