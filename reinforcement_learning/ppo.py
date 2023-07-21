@@ -7,6 +7,7 @@ import copy
 import numpy as np
 import torch
 from torch import nn, optim
+from torch.utils.data import TensorDataset, DataLoader
 
 
 def gae(rewards: np.ndarray, critic_values: np.ndarray, gamma: float, gae_lambda: float):
@@ -172,7 +173,7 @@ class CatPolicyMLP(nn.Module):
             {"params": self.extractor.parameters()},
             {"params": self.actor.parameters(), "lr": self.actor_lr},
             {"params": self.critic.parameters(), "lr": self.critic_lr}],
-            lr=self.base_lr, eps=1e-5)
+            lr=self.default_lr, eps=1e-5)
         return optimizer
 
 
@@ -190,9 +191,11 @@ class PPO:
                  ):
         # Initialize policy network
         self.policy = policy
-        self.old_policy = copy.deepcopy(policy)
+        # Initialize optimizer
+        self.optimizer = self.policy.make_optimizer()
         # old policy is always in no-grad and eval mode.
-        # These 2 settings will survive updates like
+        self.old_policy = copy.deepcopy(policy)
+        # No-grad and eval() will persist through
         # `self.old_policy.load_state_dict(self.policy.state_dict())`
         self.old_policy.eval()
         for p in self.old_policy.parameters():
@@ -230,6 +233,120 @@ class PPO:
         return action
 
     def collate(self, episodes):
-        # old values, old returns, old advantages, old log prob
-        pass
+        # observations, actions, old values, old advantages, old returns, old log prob
+        """
+        Collate a list of episodes into a single dataset.
 
+        Parameters
+        ----------
+        episodes : list of tuple
+            Each episode is a (observation_list, action_list, reward_list) tuple.
+
+        Returns
+        -------
+        Dataset
+            Can generate (observation, action, advantage) batches.
+        """
+        # Every observation has the same shape
+        # (if not, extra processing is required)
+        all_obs = []
+        # Every action has the same shape
+        all_act = []
+        # Estimated values from old_policy
+        all_val = []
+        # Every reward (scalar) has the same shape,
+        # but advantage is computed relative to one episode,
+        # so it must be preprocessed before adding to the list
+        all_adv = []
+        # Sample returns is the sum of value and advantage
+        all_ret = []
+        # Sample log probability of taking those actions
+        all_lp = []
+        for obs_list, act_list, reward_list in episodes:
+            # in rare cases, the last state in truncated cases is
+            n_steps = len(reward_list)
+            all_obs.extend(obs_list[:n_steps])
+            all_act.extend(act_list)
+
+            obs_tensor = torch.tensor(np.array(obs_list[:n_steps]), dtype=torch.float32)
+            act_tensor = torch.tensor(np.array(act_list[:n_steps]))
+            with torch.no_grad():
+                # ignore entropy
+                val_tensor, lp_tensor, _ = self.old_policy.score(obs_tensor, act_tensor)
+            val_array = val_tensor.cpu().numpy()
+            lp_array = lp_tensor.cpu().numpy()
+            adv_array = gae(rewards=np.array(reward_list), critic_values=val_array,
+                            gamma=self.gamma, gae_lambda=self.gae_lambda)
+            ret_array = val_array + adv_array
+
+            all_val.append(val_array)
+            all_adv.append(adv_array)
+            all_ret.append(ret_array)
+            all_lp.append(lp_array)
+
+        # start collating
+        all_obs = np.array(all_obs)
+        all_act = np.array(all_act)
+        all_val = np.hstack(all_val)
+        all_adv = np.hstack(all_adv)
+        all_ret = np.hstack(all_ret)
+        all_lp = np.hstack(all_lp)
+
+        dataset = TensorDataset(*[torch.tensor(x) for x in [
+            all_obs, all_act, all_val, all_adv, all_ret, all_lp]])
+        return dataset
+
+    def learn(self, episodes):
+        dataset = self.collate(episodes)
+        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        for _ in range(self.ppo_epochs):
+            for obs, act, val, adv, ret, lp in dataloader:
+                new_val, new_lp, new_ent = self.policy.score(obs, act)
+                ppo_loss = clipped_ppo_loss(
+                    actor_log_probs=new_lp, old_log_probs=lp, old_advantages=adv, clip=self.ppo_clip)
+                vf_loss = clipped_vf_loss(
+                    critic_values=new_val, old_values=val, old_returns=ret, clip=self.vf_clip)
+                entropy_loss = -new_ent.mean()  # bigger entropy, more explore, better
+                loss = ppo_loss + self.vf_weight * vf_loss + self.entropy_weight * entropy_loss
+                print(ppo_loss.item(), vf_loss.item(), entropy_loss.item())
+                loss.backward()
+                self.optimizer.step()
+                self.optimizer.zero_grad()
+        self.old_policy.load_state_dict(self.policy.state_dict())
+
+
+def main():
+    from reinforcement_learning.run_offline import run_offline
+    import gymnasium as gym
+
+    visualize = False
+
+    env = gym.make("CartPole-v1", render_mode="human" if visualize else None)
+    # env = gym.make("MountainCar-v0", render_mode="human" if visualize else None)
+    # env = gym.make("Acrobot-v1", render_mode="human" if visualize else None)
+    # env = gym.make("Pendulum-v1", render_mode="human" if visualize else None)
+
+    policy = CatPolicyMLP(
+        n_features=env.observation_space.shape[0],
+        n_actions=env.action_space.n,
+        d=64,
+        actor_lr=1e-3,
+        critic_lr=1e-3,
+        default_lr=1e-3)
+    agent = PPO(
+        policy=policy,
+        gamma=0.99,
+        gae_lambda=0.95,
+        ppo_epochs=5,
+        batch_size=128,
+        vf_weight=1.0,
+        entropy_weight=0.0,
+        ppo_clip=0.6,
+        vf_clip=100.0
+    )
+
+    run_offline(env, agent, episodes_per_learn=5, max_frames=150_000)
+
+
+if __name__ == '__main__':
+    main()
