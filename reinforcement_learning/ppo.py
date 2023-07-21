@@ -9,20 +9,21 @@ import torch
 from torch import nn, optim
 from torch.utils.data import TensorDataset, DataLoader
 
-
-def gae(rewards: np.ndarray, critic_values: np.ndarray, gamma: float, gae_lambda: float):
-    # Generalized advantage estimation
-    # GAE[lambda](t) = ReturnsTD[lambda](t) - EstimatedValues(t)
-    # The same gae_lambda is used for GAE and TD-lambda returns
-    # Typical setting: gamma=0.99, gae_lambda=0.95
-    n_steps = len(rewards)
-    advantages = np.zeros(n_steps)
-    advantages[-1] = rewards[-1] - critic_values[-1]
-    for t in reversed(range(n_steps - 1)):  # from n_steps-2 to 0 inclusive
-        delta = rewards[t] + gamma * critic_values[t + 1] - critic_values[t]
-        advantages[t] = delta + gamma * gae_lambda * advantages[t + 1]
-    return advantages
-
+from reinforcement_learning.utils import gae
+#
+# def gae(rewards: np.ndarray, critic_values: np.ndarray, gamma: float, gae_lambda: float):
+#     # Generalized advantage estimation
+#     # GAE[lambda](t) = ReturnsTD[lambda](t) - EstimatedValues(t)
+#     # The same gae_lambda is used for GAE and TD-lambda returns
+#     # Typical setting: gamma=0.99, gae_lambda=0.95
+#     n_steps = len(rewards)
+#     advantages = np.zeros(n_steps)
+#     advantages[-1] = rewards[-1] - critic_values[-1]
+#     for t in reversed(range(n_steps - 1)):  # from n_steps-2 to 0 inclusive
+#         delta = rewards[t] + gamma * critic_values[t + 1] - critic_values[t]
+#         advantages[t] = delta + gamma * gae_lambda * advantages[t + 1]
+#     return advantages
+#
 
 def clipped_ppo_loss(actor_log_probs, old_log_probs, old_advantages, clip):
     """
