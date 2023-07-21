@@ -228,8 +228,7 @@ class PPO:
 
     def act(self):
         with torch.no_grad():
-            logits = self.old_policy.sample(self.current_obs).unsqueeze(0)
-            action = torch.distributions.Categorical(logits=logits).sample().item()
+            action = self.old_policy.sample(self.current_obs).item()
         return action
 
     def collate(self, episodes):
@@ -308,7 +307,6 @@ class PPO:
                     critic_values=new_val, old_values=val, old_returns=ret, clip=self.vf_clip)
                 entropy_loss = -new_ent.mean()  # bigger entropy, more explore, better
                 loss = ppo_loss + self.vf_weight * vf_loss + self.entropy_weight * entropy_loss
-                print(ppo_loss.item(), vf_loss.item(), entropy_loss.item())
                 loss.backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
@@ -329,7 +327,7 @@ def main():
     policy = CatPolicyMLP(
         n_features=env.observation_space.shape[0],
         n_actions=env.action_space.n,
-        d=64,
+        d=32,
         actor_lr=1e-3,
         critic_lr=1e-3,
         default_lr=1e-3)
@@ -337,12 +335,12 @@ def main():
         policy=policy,
         gamma=0.99,
         gae_lambda=0.95,
-        ppo_epochs=5,
-        batch_size=128,
-        vf_weight=1.0,
-        entropy_weight=0.0,
-        ppo_clip=0.6,
-        vf_clip=100.0
+        ppo_epochs=3,
+        batch_size=64,
+        vf_weight=0.5,
+        entropy_weight=0.01,
+        ppo_clip=0.2,
+        vf_clip=1.0
     )
 
     run_offline(env, agent, episodes_per_learn=5, max_frames=150_000)
