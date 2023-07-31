@@ -139,7 +139,7 @@ class CatPolicyMLP(nn.Module):
         obs = self.extractor(obs)
         logits = self.actor(obs)
         dist = torch.distributions.Categorical(logits=logits)
-        return dist.sample()
+        return dist.sample().item()
 
     def score(self, obs, action):
         # intermediate representation
@@ -160,6 +160,89 @@ class CatPolicyMLP(nn.Module):
         optimizer = optim.Adam([
             {"params": self.extractor.parameters()},
             {"params": self.actor.parameters(), "lr": self.actor_lr},
+            {"params": self.critic.parameters(), "lr": self.critic_lr}],
+            lr=self.default_lr, eps=1e-5)
+        return optimizer
+
+
+class GaussianMLP(nn.Module):
+    def __init__(self, n_features, n_actions, d=64,
+                 low=None, high=None,
+                 actor_lr=2.5e-4, critic_lr=1e-3, default_lr=1e-3):
+        """
+        A simple MLP backbone for a PPO agent,
+        where the input features are all numerical,
+        and the output is a continuous action space.
+        """
+        super().__init__()
+        self.low = np.array(low)
+        self.high = np.array(high)
+        self.d = d
+        self.n_features = n_features
+        self.n_actions = n_actions
+        self.extractor = nn.Sequential(
+            nn.Linear(n_features, d),
+            nn.ReLU(),
+            nn.Linear(d, d),
+            nn.ReLU(),
+        )
+        self.actor_mean = nn.Sequential(
+            nn.Linear(d, d),
+            nn.ReLU(),
+            nn.Linear(d, d),
+            nn.ReLU(),
+            nn.Linear(d, n_actions),
+        )
+        self.actor_log_std = nn.Sequential(
+            nn.Linear(d, d),
+            nn.ReLU(),
+            nn.Linear(d, d),
+            nn.ReLU(),
+            nn.Linear(d, n_actions)
+        )
+        self.critic = nn.Sequential(
+            nn.Linear(d, d),
+            nn.ReLU(),
+            nn.Linear(d, d),
+            nn.ReLU(),
+            nn.Linear(d, 1),
+        )
+        self.actor_lr = actor_lr
+        self.critic_lr = critic_lr
+        self.default_lr = default_lr
+
+    def sample(self, obs):
+        x = self.extractor(obs)
+        mean = self.actor_mean(x)
+        std = self.actor_log_std(x).exp()
+        dist = torch.distributions.Normal(loc=mean, scale=std)
+        action = dist.sample()
+        action = action.cpu().numpy()
+        action = np.clip(action, a_min=self.low, a_max=self.high)
+        return action
+
+    def score(self, obs, action):
+        # intermediate representation
+        x = self.extractor(obs)
+        # critic value for state/observation
+        estimated_value = self.critic(x).flatten()
+        # action mean
+        mean = self.actor_mean(x)
+        # action std
+        std = self.actor_log_std(x).exp()
+        # action distribution
+        dist = torch.distributions.Normal(loc=mean, scale=std)
+        # action log probability
+        action_log_prob = dist.log_prob(action).flatten()
+        # action entropy
+        entropy = dist.entropy()
+        return estimated_value, action_log_prob, entropy
+
+    def make_optimizer(self):
+        optimizer = optim.Adam([
+            {"params": self.extractor.parameters()},
+            {"params": self.actor_mean.parameters(), "lr": self.actor_lr},
+            {"params": self.actor_log_std.parameters(), "lr": self.actor_lr},
             {"params": self.critic.parameters(), "lr": self.critic_lr}],
             lr=self.default_lr, eps=1e-5)
         return optimizer
@@ -216,7 +299,7 @@ class PPO:
 
     def act(self):
         with torch.no_grad():
-            action = self.old_policy.sample(self.current_obs).item()
+            action = self.old_policy.sample(self.current_obs)
         return action
 
     def collate(self, episodes):
@@ -301,7 +384,7 @@ class PPO:
         self.old_policy.load_state_dict(self.policy.state_dict())
 
 
-def main():
+def run_cart_pole():
     from reinforcement_learning.run_offline import run_offline
     import gymnasium as gym
 
@@ -332,8 +415,42 @@ def main():
         vf_clip=3.0
     )
 
-    run_offline(env, agent, episodes_per_learn=5, max_frames=500_000)
+    run_offline(env, agent, episodes_per_learn=5, max_frames=150_000)
+
+
+def run_pendulum():
+    from reinforcement_learning.run_offline import run_offline
+    import gymnasium as gym
+
+    visualize = False
+
+    # env = gym.make("Acrobot-v1", render_mode="human" if visualize else None)
+    env = gym.make("Pendulum-v1", render_mode="human" if visualize else None)
+
+    policy = GaussianMLP(
+        n_features=env.observation_space.shape[0],
+        n_actions=len(env.action_space.shape),
+        d=32,
+        low=-2,
+        high=2,
+        actor_lr=1e-3,
+        critic_lr=1e-3,
+        default_lr=1e-3)
+
+    agent = PPO(
+        policy=policy,
+        gamma=0.99,
+        gae_lambda=0.95,
+        ppo_epochs=3,
+        batch_size=64,
+        vf_weight=0.5,
+        entropy_weight=0.01,
+        ppo_clip=0.2,
+        vf_clip=3.0
+    )
+
+    run_offline(env, agent, episodes_per_learn=5, max_frames=100_000)
 
 
 if __name__ == '__main__':
-    main()
+    run_pendulum()
