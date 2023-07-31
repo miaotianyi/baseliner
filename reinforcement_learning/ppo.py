@@ -10,20 +10,7 @@ from torch import nn, optim
 from torch.utils.data import TensorDataset, DataLoader
 
 from reinforcement_learning.utils import gae
-#
-# def gae(rewards: np.ndarray, critic_values: np.ndarray, gamma: float, gae_lambda: float):
-#     # Generalized advantage estimation
-#     # GAE[lambda](t) = ReturnsTD[lambda](t) - EstimatedValues(t)
-#     # The same gae_lambda is used for GAE and TD-lambda returns
-#     # Typical setting: gamma=0.99, gae_lambda=0.95
-#     n_steps = len(rewards)
-#     advantages = np.zeros(n_steps)
-#     advantages[-1] = rewards[-1] - critic_values[-1]
-#     for t in reversed(range(n_steps - 1)):  # from n_steps-2 to 0 inclusive
-#         delta = rewards[t] + gamma * critic_values[t + 1] - critic_values[t]
-#         advantages[t] = delta + gamma * gae_lambda * advantages[t + 1]
-#     return advantages
-#
+
 
 def clipped_ppo_loss(actor_log_probs, old_log_probs, old_advantages, clip):
     """
@@ -324,6 +311,7 @@ def main():
     # env = gym.make("MountainCar-v0", render_mode="human" if visualize else None)
     # env = gym.make("Acrobot-v1", render_mode="human" if visualize else None)
     # env = gym.make("Pendulum-v1", render_mode="human" if visualize else None)
+    # env = gym.make("LunarLander-v2", render_mode="human" if visualize else None)
 
     policy = CatPolicyMLP(
         n_features=env.observation_space.shape[0],
@@ -341,10 +329,10 @@ def main():
         vf_weight=0.5,
         entropy_weight=0.01,
         ppo_clip=0.2,
-        vf_clip=1.0
+        vf_clip=3.0
     )
 
-    run_offline(env, agent, episodes_per_learn=5, max_frames=150_000)
+    run_offline(env, agent, episodes_per_learn=5, max_frames=500_000)
 
 
 if __name__ == '__main__':
