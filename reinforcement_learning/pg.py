@@ -42,7 +42,7 @@ class CatMLP(nn.Module):
     def sample(self, obs):
         logits = self.net(obs)
         dist = torch.distributions.Categorical(logits=logits)
-        return dist.sample()
+        return dist.sample().item()
 
     def score(self, obs, action):
         logits = self.net(obs)
@@ -52,6 +52,98 @@ class CatMLP(nn.Module):
 
     def make_optimizer(self):
         optimizer = optim.Adam(self.net.parameters(), lr=self.lr, eps=1e-5)
+        return optimizer
+
+
+class CELU1p(nn.Module):
+    def __init__(self, alpha=1.0, eps=1e-5):
+        # To model a strictly positive quantity (e.g. standard deviation std in VAE),
+        # people often let NN output log(std)
+        # and calculate std = net(x).exp()
+        # But this could result in overflow when net(x) gets bigger.
+        super(CELU1p, self).__init__()
+        self.alpha = alpha
+        self.eps = eps
+        self.added = eps + 1.0
+
+    def forward(self, x):
+        return torch.celu(x, alpha=self.alpha) + self.added
+
+
+class BetaMLP(nn.Module):
+    def __init__(self, n_features, n_actions, d=64, lr=1e-3,
+                 low=0.0, high=1.0):
+        super(BetaMLP, self).__init__()
+        # 4-argument Beta distribution
+        # Useful for distributions bounded on 2 sides
+        self.low = low
+        self.range = high - low
+        self.lr = lr
+
+        self.net = nn.Sequential(
+            nn.Linear(n_features, d),
+            nn.ReLU(),
+            nn.Linear(d, d),
+            nn.ReLU(),
+            nn.Linear(d, n_actions * 2),
+            CELU1p()
+        )
+
+    def sample(self, obs):
+        alpha, beta = torch.chunk(self.net(obs), chunks=2, dim=-1)
+        dist = torch.distributions.Beta(concentration1=alpha, concentration0=beta)
+        action = dist.sample().cpu().numpy()
+        action = action * self.range + self.low
+        return action
+
+    def score(self, obs, action):
+        action = (action - self.low) / self.range   # squeeze back to [0, 1]
+        alpha, beta = torch.chunk(self.net(obs), chunks=2, dim=-1)
+        dist = torch.distributions.Beta(concentration1=alpha, concentration0=beta)
+        action_log_prob = dist.log_prob(action).flatten()
+        return action_log_prob
+
+    def make_optimizer(self):
+        optimizer = optim.Adam(self.net.parameters(), lr=self.lr, eps=1e-5)
+        return optimizer
+
+
+class GaussianMLP(nn.Module):
+    def __init__(self, n_features, n_actions, d=64, lr=1e-3,
+                 low=None, high=None):
+        super(GaussianMLP, self).__init__()
+        self.mean = nn.Sequential(
+            nn.Linear(n_features, d),
+            nn.ReLU(),
+            nn.Linear(d, d),
+            nn.ReLU(),
+            nn.Linear(d, d),
+            nn.ReLU(),
+            nn.Linear(d, n_actions)
+        )
+        self.log_std = nn.Parameter(-0.5 * torch.ones(n_actions))
+        self.lr = lr
+        # lower and upper bound for continuous actions
+        self.low = low
+        self.high = high
+
+    def sample(self, obs):
+        mean = self.mean(obs)
+        std = self.log_std.exp()
+        dist = torch.distributions.Normal(loc=mean, scale=std)
+        action = dist.sample().cpu().numpy()
+        action = np.clip(action, a_min=self.low, a_max=self.high)
+        return action
+
+    def score(self, obs, action):
+        mean = self.mean(obs)
+        std = self.log_std.exp()
+        dist = torch.distributions.Normal(loc=mean, scale=std)
+        action_log_prob = dist.log_prob(action).flatten()
+        return action_log_prob
+
+    def make_optimizer(self):
+        optimizer = optim.Adam(self.mean.parameters(), lr=self.lr, eps=1e-5)
         return optimizer
 
 
@@ -74,12 +166,8 @@ class VPG:
     def act(self):
         with torch.no_grad():
             # [1, n_actions]
-            # action_probs = self.policy_net(self.current_obs).unsqueeze(0)
-            # action = Categorical(action_probs).sample().item()
             obs = torch.tensor(self.current_obs, dtype=torch.float32)
-            action = self.policy.sample(obs).item()
-            # logits = self.policy(obs).unsqueeze(0)
-            # action = torch.distributions.Categorical(logits=logits).sample().item()
+            action = self.policy.sample(obs)
         return action
 
     def collate(self, episodes):
@@ -160,5 +248,25 @@ def run_cart_pole(visualize=True):
     run_offline(env, agent, episodes_per_learn=5, max_frames=150_000)
 
 
+def run_pendulum(visualize=True):
+    import gymnasium as gym
+    # env = gym.make("Acrobot-v1", render_mode="human" if visualize else None)
+    env = gym.make("Pendulum-v1", render_mode="human" if visualize else None)
+    policy = BetaMLP(
+        n_features=env.observation_space.shape[0],
+        n_actions=len(env.action_space.shape),
+        d=64,
+        lr=1e-4,
+        low=-2.,
+        high=2.,
+    )
+    agent = VPG(
+        policy=policy,
+        gamma=0.95,
+        batch_size=128
+    )
+    run_offline(env, agent, episodes_per_learn=10, max_frames=100_000)
+
+
 if __name__ == '__main__':
-    run_cart_pole(visualize=False)
+    run_pendulum(visualize=False)
