@@ -176,7 +176,7 @@ class Func(nn.Module):
 
 class GaussianMLP(nn.Module):
     def __init__(self, n_features, n_actions, d=64,
-                 low=None, high=None,
+                 # low=None, high=None,
                  actor_lr=2.5e-4, critic_lr=1e-3, default_lr=1e-3):
         """
         A simple MLP backbone for a PPO agent,
@@ -184,28 +184,22 @@ class GaussianMLP(nn.Module):
         and the output is a continuous action space.
         """
         super().__init__()
-        self.low = np.array(low)
-        self.high = np.array(high)
+        # self.low = np.array(low)
+        # self.high = np.array(high)
         self.d = d
         self.n_features = n_features
         self.n_actions = n_actions
-        self.extractor = nn.Sequential(
+        self.actor_mean = nn.Sequential(
             nn.Linear(n_features, d),
             nn.ReLU(),
             nn.Linear(d, d),
             nn.ReLU(),
-        )
-        self.actor_mean = nn.Sequential(
-            nn.Linear(d, d),
-            nn.ReLU(),
-            nn.Linear(d, d),
-            nn.ReLU(),
             nn.Linear(d, n_actions),
-            Func(lambda x: 2 * torch.tanh(x))
+            # Func(lambda x: 2 * torch.tanh(x))
         )
         self.actor_log_std = nn.Parameter(-0.5 * torch.ones(n_actions))
         self.critic = nn.Sequential(
-            nn.Linear(d, d),
+            nn.Linear(n_features, d),
             nn.ReLU(),
             nn.Linear(d, d),
             nn.ReLU(),
@@ -216,18 +210,20 @@ class GaussianMLP(nn.Module):
         self.default_lr = default_lr
 
     def sample(self, obs):
-        x = self.extractor(obs)
+        # x = self.extractor(obs)
+        x = obs
         mean = self.actor_mean(x)
         std = self.actor_log_std.exp()
         dist = torch.distributions.Normal(loc=mean, scale=std)
         action = dist.sample()
         action = action.cpu().numpy()
-        action = np.clip(action, a_min=self.low, a_max=self.high)
+        # action = np.clip(action, a_min=self.low, a_max=self.high)
         return action
 
     def score(self, obs, action):
         # intermediate representation
-        x = self.extractor(obs)
+        # x = self.extractor(obs)
+        x = obs
         # critic value for state/observation
         estimated_value = self.critic(x).flatten()
         # action mean
@@ -244,7 +240,7 @@ class GaussianMLP(nn.Module):
 
     def make_optimizer(self):
         optimizer = optim.Adam([
-            {"params": self.extractor.parameters()},
+            # {"params": self.extractor.parameters()},
             {"params": self.actor_mean.parameters(), "lr": self.actor_lr},
             {"params": self.actor_log_std, "lr": self.actor_lr},
             {"params": self.critic.parameters(), "lr": self.critic_lr}],
@@ -372,10 +368,17 @@ class PPO:
 
     def learn(self, episodes):
         dataset = self.collate(episodes)
-        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        # drop_last prevents "NaN std" during advantage normalization
+        # Not much information is lost because shuffle is random
+        # and there are multiple PPO epochs.
+        dataloader = DataLoader(
+            dataset, batch_size=self.batch_size, shuffle=True,
+            drop_last=True
+        )
         for _ in range(self.ppo_epochs):
             for obs, act, val, adv, ret, lp in dataloader:
                 new_val, new_lp, new_ent = self.policy.score(obs, act)
+                adv = (adv - adv.mean()) / adv.std()
                 ppo_loss = clipped_ppo_loss(
                     actor_log_probs=new_lp, old_log_probs=lp, old_advantages=adv, clip=self.ppo_clip)
                 vf_loss = clipped_vf_loss(
@@ -435,26 +438,26 @@ def run_pendulum():
         n_features=env.observation_space.shape[0],
         n_actions=len(env.action_space.shape),
         d=64,
-        low=-2,
-        high=2,
+        # low=-2,
+        # high=2,
         actor_lr=1e-3,
         critic_lr=1e-3,
         default_lr=1e-3)
 
     agent = PPO(
         policy=policy,
-        gamma=0.99,
+        gamma=0.9,
         gae_lambda=0.95,
-        ppo_epochs=3,
+        ppo_epochs=5,
         batch_size=64,
         vf_weight=0.5,
         entropy_weight=0.01,
         ppo_clip=0.2,
-        vf_clip=3.0
+        vf_clip=100.0
     )
 
-    run_offline(env, agent, episodes_per_learn=5, max_frames=100_000)
+    run_offline(env, agent, episodes_per_learn=10, max_frames=150_000)
 
 
 if __name__ == '__main__':
-    run_cart_pole()
+    run_pendulum()
