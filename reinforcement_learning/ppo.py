@@ -7,6 +7,7 @@ import copy
 import numpy as np
 import torch
 from torch import nn, optim
+from torch.nn import functional as F
 from torch.utils.data import TensorDataset, DataLoader
 
 from reinforcement_learning.utils import gae
@@ -174,6 +175,75 @@ class Func(nn.Module):
         return self.func(x)
 
 
+def mlp(dims, activation, output_activation=nn.Identity):
+    """
+    Easily initialize an MLP.
+
+    Copied from Spinning Up.
+    """
+    layers = []
+    for i in range(len(dims) - 1):
+        act = activation if i < len(dims) - 2 else output_activation
+        layers += [nn.Linear(dims[i], dims[i + 1]), act()]
+    return nn.Sequential(*layers)
+
+
+class BetaMLP(nn.Module):
+    def __init__(self, n_features, n_actions,
+                 low=0.0, high=1.0,
+                 actor_lr=2.5e-4, critic_lr=1e-3):
+        super().__init__()
+        self.actor = mlp([n_features] + [64] * 2 + [n_actions * 2], activation=nn.ReLU)
+        self.critic = mlp([n_features] + [64] * 2 + [1], activation=nn.ReLU)
+
+        self.low = low
+        self.range = high - low
+        self.actor_lr = actor_lr
+        self.critic_lr = critic_lr
+
+    @staticmethod
+    def real_to_positive(reals):
+        # return F.softplus(reals) + 1.0
+        # return F.elu(reals) + 2.0
+        return torch.exp(reals) + 1.0
+
+    def sample(self, obs):
+        # real-valued outputs (to be converted to strictly positive)
+        reals = self.actor(obs)
+        positive = self.real_to_positive(reals)
+        alpha, beta = torch.chunk(positive, chunks=2, dim=-1)
+        dist = torch.distributions.Beta(concentration1=alpha, concentration0=beta)
+        action = dist.sample()
+        action = action.cpu().numpy()
+        action = action * self.range + self.low
+        return action
+
+    def score(self, obs, action):
+        # intermediate representation
+        # critic value for state/observation
+        estimated_value = self.critic(obs).flatten()
+
+        # action distribution
+        reals = self.actor(obs)
+        positive = self.real_to_positive(reals)
+        alpha, beta = torch.chunk(positive, chunks=2, dim=-1)
+        dist = torch.distributions.Beta(concentration1=alpha, concentration0=beta)
+
+        # action log probability
+        action = (action - self.low) / self.range   # squeeze back to [0, 1]
+        action_log_prob = dist.log_prob(action).flatten()
+        # action entropy
+        entropy = dist.entropy()
+        return estimated_value, action_log_prob, entropy
+
+    def make_optimizer(self):
+        optimizer = optim.Adam([
+            {"params": self.actor.parameters(), "lr": self.actor_lr},
+            {"params": self.critic.parameters(), "lr": self.critic_lr}],
+            eps=1e-5)
+        return optimizer
+
+
 class GaussianMLP(nn.Module):
     def __init__(self, n_features, n_actions, d=64,
                  # low=None, high=None,
@@ -197,7 +267,16 @@ class GaussianMLP(nn.Module):
             nn.Linear(d, n_actions),
             # Func(lambda x: 2 * torch.tanh(x))
         )
-        self.actor_log_std = nn.Parameter(-0.5 * torch.ones(n_actions))
+        # self.actor_log_std = nn.Parameter(-0.5 * torch.ones(n_actions))
+        self.actor_log_std = nn.Sequential(
+            nn.Linear(n_features, d),
+            nn.ReLU(),
+            nn.Linear(d, d),
+            nn.ReLU(),
+            nn.Linear(d, n_actions),
+        )
+        # nn.init.constant_(self.actor_log_std[-1].bias, -0.5)
+
         self.critic = nn.Sequential(
             nn.Linear(n_features, d),
             nn.ReLU(),
@@ -213,7 +292,7 @@ class GaussianMLP(nn.Module):
         # x = self.extractor(obs)
         x = obs
         mean = self.actor_mean(x)
-        std = self.actor_log_std.exp()
+        std = self.actor_log_std(x).exp()
         dist = torch.distributions.Normal(loc=mean, scale=std)
         action = dist.sample()
         action = action.cpu().numpy()
@@ -229,7 +308,7 @@ class GaussianMLP(nn.Module):
         # action mean
         mean = self.actor_mean(x)
         # action std
-        std = self.actor_log_std.exp()
+        std = self.actor_log_std(x).exp()
         # action distribution
         dist = torch.distributions.Normal(loc=mean, scale=std)
         # action log probability
@@ -242,7 +321,7 @@ class GaussianMLP(nn.Module):
         optimizer = optim.Adam([
             # {"params": self.extractor.parameters()},
             {"params": self.actor_mean.parameters(), "lr": self.actor_lr},
-            {"params": self.actor_log_std, "lr": self.actor_lr},
+            {"params": self.actor_log_std.parameters(), "lr": self.actor_lr},
             {"params": self.critic.parameters(), "lr": self.critic_lr}],
             lr=self.default_lr, eps=1e-5)
         return optimizer
@@ -434,21 +513,30 @@ def run_pendulum():
     # env = gym.make("Acrobot-v1", render_mode="human" if visualize else None)
     env = gym.make("Pendulum-v1", render_mode="human" if visualize else None)
 
-    policy = GaussianMLP(
+    # policy = GaussianMLP(
+    #     n_features=env.observation_space.shape[0],
+    #     n_actions=len(env.action_space.shape),
+    #     d=64,
+    #     # low=-2,
+    #     # high=2,
+    #     actor_lr=1e-3,
+    #     critic_lr=1e-3,
+    #     default_lr=1e-3)
+
+    policy = BetaMLP(
         n_features=env.observation_space.shape[0],
         n_actions=len(env.action_space.shape),
-        d=64,
-        # low=-2,
-        # high=2,
+        low=-2,
+        high=2,
         actor_lr=1e-3,
-        critic_lr=1e-3,
-        default_lr=1e-3)
+        critic_lr=1e-3
+    )
 
     agent = PPO(
         policy=policy,
         gamma=0.9,
         gae_lambda=0.95,
-        ppo_epochs=5,
+        ppo_epochs=3,
         batch_size=64,
         vf_weight=0.5,
         entropy_weight=0.01,
