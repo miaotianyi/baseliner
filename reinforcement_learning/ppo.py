@@ -672,7 +672,6 @@ def run_acrobot(visualize=False):
     from reinforcement_learning.run_offline import run_offline
     import gymnasium as gym
 
-    # env = gym.make("MountainCar-v0", render_mode="human" if visualize else None)
     env = gym.make("Acrobot-v1", render_mode="human" if visualize else None)
 
     policy = SepCatMLP(
@@ -698,5 +697,34 @@ def run_acrobot(visualize=False):
     run_offline(env, agent, episodes_per_learn=5, max_frames=150_000)
 
 
+def run_mountain_car(visualize=False):
+    from reinforcement_learning.run_offline import run_offline
+    import gymnasium as gym
+
+    env = gym.make("MountainCar-v0", render_mode="human" if visualize else None)
+
+    policy = SepCatMLP(
+        n_features=env.observation_space.shape[0],
+        n_actions=env.action_space.n,
+        actor_lr=1e-3,
+        critic_lr=1e-3,
+        d=128
+    )
+
+    agent = PPO(
+        policy=policy,
+        gamma=0.99,
+        gae_lambda=0.95,
+        ppo_epochs=3,
+        batch_size=64,
+        vf_weight=0.5,
+        entropy_weight=0.01,
+        ppo_clip=0.2,
+        vf_clip=10.0
+    )
+
+    run_offline(env, agent, episodes_per_learn=5, max_frames=150_000)
+
+
 if __name__ == '__main__':
-    run_acrobot(visualize=False)
+    run_mountain_car(visualize=False)
