@@ -188,6 +188,48 @@ def mlp(dims, activation, output_activation=nn.Identity):
     return nn.Sequential(*layers)
 
 
+class SepCatMLP(nn.Module):
+    def __init__(self, n_features, n_actions,
+                 actor_lr, critic_lr,
+                 d=64):
+        super().__init__()
+        # separate actor and critic networks
+        self.actor = mlp([n_features] + [d] * 2 + [n_actions], activation=nn.ReLU)
+        self.critic = mlp([n_features] + [d] * 2 + [1], activation=nn.ReLU)
+
+        self.actor_lr = actor_lr
+        self.critic_lr = critic_lr
+
+    def sample(self, obs):
+        # real-valued outputs (to be converted to strictly positive)
+        logits = self.actor(obs)
+        dist = torch.distributions.Categorical(logits=logits)
+        action = dist.sample().item()
+        return action
+
+    def score(self, obs, action):
+        # intermediate representation
+        # critic value for state/observation
+        estimated_value = self.critic(obs).flatten()
+
+        # action distribution
+        logits = self.actor(obs)
+        dist = torch.distributions.Categorical(logits=logits)
+
+        # action log probability
+        action_log_prob = dist.log_prob(action)
+        # action entropy
+        entropy = dist.entropy()
+        return estimated_value, action_log_prob, entropy
+
+    def make_optimizer(self):
+        optimizer = optim.Adam([
+            {"params": self.actor.parameters(), "lr": self.actor_lr},
+            {"params": self.critic.parameters(), "lr": self.critic_lr}],
+            eps=1e-5)
+        return optimizer
+
+
 class BetaMLP(nn.Module):
     def __init__(self, n_features, n_actions,
                  low=0.0, high=1.0,
@@ -626,21 +668,21 @@ def run_mountain_car_continuous(visualize=False):
     run_offline(env, agent, episodes_per_learn=10, max_frames=150_000)
 
 
-def run_mountain_car():
+def run_acrobot(visualize=False):
     from reinforcement_learning.run_offline import run_offline
     import gymnasium as gym
 
-    visualize = False
+    # env = gym.make("MountainCar-v0", render_mode="human" if visualize else None)
+    env = gym.make("Acrobot-v1", render_mode="human" if visualize else None)
 
-    env = gym.make("MountainCar-v0", render_mode="human" if visualize else None)
-
-    policy = CatPolicyMLP(
+    policy = SepCatMLP(
         n_features=env.observation_space.shape[0],
         n_actions=env.action_space.n,
-        d=32,
         actor_lr=1e-3,
         critic_lr=1e-3,
-        default_lr=1e-3)
+        d=256
+    )
+
     agent = PPO(
         policy=policy,
         gamma=0.99,
@@ -650,11 +692,11 @@ def run_mountain_car():
         vf_weight=0.5,
         entropy_weight=0.01,
         ppo_clip=0.2,
-        vf_clip=3.0
+        vf_clip=10.0
     )
 
     run_offline(env, agent, episodes_per_learn=5, max_frames=150_000)
 
 
 if __name__ == '__main__':
-    run_mountain_car()
+    run_acrobot(visualize=False)
