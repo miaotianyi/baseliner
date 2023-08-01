@@ -231,7 +231,7 @@ class BetaMLP(nn.Module):
 
         # action log probability
         action = (action - self.low) / self.range   # squeeze back to [0, 1]
-        action_log_prob = dist.log_prob(action).flatten()
+        action_log_prob = dist.log_prob(action).sum(dim=-1)
         # action entropy
         entropy = dist.entropy()
         return estimated_value, action_log_prob, entropy
@@ -479,7 +479,6 @@ def run_cart_pole():
     env = gym.make("CartPole-v1", render_mode="human" if visualize else None)
     # env = gym.make("MountainCar-v0", render_mode="human" if visualize else None)
     # env = gym.make("Acrobot-v1", render_mode="human" if visualize else None)
-    # env = gym.make("Pendulum-v1", render_mode="human" if visualize else None)
     # env = gym.make("LunarLander-v2", render_mode="human" if visualize else None)
 
     policy = CatPolicyMLP(
@@ -504,30 +503,46 @@ def run_cart_pole():
     run_offline(env, agent, episodes_per_learn=5, max_frames=150_000)
 
 
-def run_pendulum():
+def run_lunar_lander(visualize=False):
     from reinforcement_learning.run_offline import run_offline
     import gymnasium as gym
 
-    visualize = False
+    env = gym.make("LunarLander-v2", render_mode="human" if visualize else None)
 
-    # env = gym.make("Acrobot-v1", render_mode="human" if visualize else None)
+    policy = CatPolicyMLP(
+        n_features=env.observation_space.shape[0],
+        n_actions=env.action_space.n,
+        d=64,
+        actor_lr=1e-3,
+        critic_lr=1e-3,
+        default_lr=1e-3)
+    agent = PPO(
+        policy=policy,
+        gamma=0.99,
+        gae_lambda=0.95,
+        ppo_epochs=3,
+        batch_size=64,
+        vf_weight=0.5,
+        entropy_weight=0.01,
+        ppo_clip=0.2,
+        vf_clip=3.0
+    )
+    run_offline(env, agent, episodes_per_learn=5, max_frames=500_000)
+
+
+def run_pendulum(visualize=False):
+    from reinforcement_learning.run_offline import run_offline
+    import gymnasium as gym
+
     env = gym.make("Pendulum-v1", render_mode="human" if visualize else None)
-
-    # policy = GaussianMLP(
-    #     n_features=env.observation_space.shape[0],
-    #     n_actions=len(env.action_space.shape),
-    #     d=64,
-    #     # low=-2,
-    #     # high=2,
-    #     actor_lr=1e-3,
-    #     critic_lr=1e-3,
-    #     default_lr=1e-3)
+    low, high = -2., 2.
+    n_actions = 1
 
     policy = BetaMLP(
         n_features=env.observation_space.shape[0],
-        n_actions=len(env.action_space.shape),
-        low=-2,
-        high=2,
+        n_actions=n_actions,
+        low=low,
+        high=high,
         actor_lr=1e-3,
         critic_lr=1e-3
     )
@@ -547,5 +562,37 @@ def run_pendulum():
     run_offline(env, agent, episodes_per_learn=10, max_frames=150_000)
 
 
+def run_lunar_lander_continuous(visualize=False):
+    from reinforcement_learning.run_offline import run_offline
+    import gymnasium as gym
+
+    env = gym.make("LunarLander-v2", continuous=True)
+    low, high = -1., 1.
+    n_actions = 2
+
+    policy = BetaMLP(
+        n_features=env.observation_space.shape[0],
+        n_actions=n_actions,
+        low=low,
+        high=high,
+        actor_lr=1e-3,
+        critic_lr=1e-3
+    )
+
+    agent = PPO(
+        policy=policy,
+        gamma=0.99,
+        gae_lambda=0.95,
+        ppo_epochs=3,
+        batch_size=64,
+        vf_weight=0.5,
+        entropy_weight=0.01,
+        ppo_clip=0.2,
+        vf_clip=100.0
+    )
+
+    run_offline(env, agent, episodes_per_learn=5, max_frames=200_000)
+
+
 if __name__ == '__main__':
-    run_pendulum()
+    run_lunar_lander_continuous()
