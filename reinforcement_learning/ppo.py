@@ -626,5 +626,35 @@ def run_mountain_car_continuous(visualize=False):
     run_offline(env, agent, episodes_per_learn=10, max_frames=150_000)
 
 
+def run_mountain_car():
+    from reinforcement_learning.run_offline import run_offline
+    import gymnasium as gym
+
+    visualize = False
+
+    env = gym.make("MountainCar-v0", render_mode="human" if visualize else None)
+
+    policy = CatPolicyMLP(
+        n_features=env.observation_space.shape[0],
+        n_actions=env.action_space.n,
+        d=32,
+        actor_lr=1e-3,
+        critic_lr=1e-3,
+        default_lr=1e-3)
+    agent = PPO(
+        policy=policy,
+        gamma=0.99,
+        gae_lambda=0.95,
+        ppo_epochs=3,
+        batch_size=64,
+        vf_weight=0.5,
+        entropy_weight=0.01,
+        ppo_clip=0.2,
+        vf_clip=3.0
+    )
+
+    run_offline(env, agent, episodes_per_learn=5, max_frames=150_000)
+
+
 if __name__ == '__main__':
-    run_mountain_car_continuous()
+    run_mountain_car()
