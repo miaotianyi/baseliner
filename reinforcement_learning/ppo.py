@@ -91,6 +91,8 @@ def clipped_vf_loss(
     scalar
     """
     # cannot deviate too much from old_values
+    # if clip is None:
+    #     return 0.5 * ((critic_values - old_returns) ** 2).mean()
     clipped_values = old_values + (critic_values - old_values).clamp(min=-clip, max=clip)
     vf_loss = torch.maximum(
         (critic_values - old_returns) ** 2, (clipped_values - old_returns) ** 2
@@ -233,10 +235,12 @@ class SepCatMLP(nn.Module):
 class BetaMLP(nn.Module):
     def __init__(self, n_features, n_actions,
                  low=0.0, high=1.0,
-                 actor_lr=2.5e-4, critic_lr=1e-3):
+                 d=64,
+                 actor_lr=2.5e-4, critic_lr=1e-3
+                 ):
         super().__init__()
-        self.actor = mlp([n_features] + [64] * 2 + [n_actions * 2], activation=nn.ReLU)
-        self.critic = mlp([n_features] + [64] * 2 + [1], activation=nn.ReLU)
+        self.actor = mlp([n_features] + [d] * 2 + [n_actions * 2], activation=nn.ReLU)
+        self.critic = mlp([n_features] + [d] * 2 + [1], activation=nn.ReLU)
 
         self.low = low
         self.range = high - low
@@ -245,9 +249,14 @@ class BetaMLP(nn.Module):
 
     @staticmethod
     def real_to_positive(reals):
-        # return F.softplus(reals) + 1.0
+        # softplus result: around 250 running mean
+        # exp result: around 170 running mean
+        # softplus seems superior for lunar lander
+        # Softplus works better for continuous lunar lander,
+        # but worse for pendulum (comparing with exp[-200])
+        return F.softplus(reals) + 1.0
         # return F.elu(reals) + 2.0
-        return torch.exp(reals) + 1.0
+        # return torch.exp(reals) + 1.0
 
     def sample(self, obs):
         # real-valued outputs (to be converted to strictly positive)
@@ -580,23 +589,22 @@ def run_pendulum(visualize=False):
     import gymnasium as gym
 
     env = gym.make("Pendulum-v1", render_mode="human" if visualize else None)
-    low, high = -2., 2.
-    n_actions = 1
 
     policy = BetaMLP(
         n_features=env.observation_space.shape[0],
-        n_actions=n_actions,
-        low=low,
-        high=high,
-        actor_lr=1e-3,
-        critic_lr=1e-3
+        n_actions=1,
+        low=-2.,
+        high=2.,
+        d=128,
+        actor_lr=3e-4,
+        critic_lr=3e-4
     )
 
     agent = PPO(
         policy=policy,
         gamma=0.9,
         gae_lambda=0.95,
-        ppo_epochs=3,
+        ppo_epochs=5,
         batch_size=64,
         vf_weight=0.5,
         entropy_weight=0.01,
@@ -604,7 +612,7 @@ def run_pendulum(visualize=False):
         vf_clip=100.0
     )
 
-    run_offline(env, agent, episodes_per_learn=10, max_frames=150_000)
+    run_offline(env, agent, episodes_per_learn=10, max_frames=500_000)
 
 
 def run_lunar_lander_continuous(visualize=False):
@@ -612,14 +620,13 @@ def run_lunar_lander_continuous(visualize=False):
     import gymnasium as gym
 
     env = gym.make("LunarLander-v2", continuous=True)
-    low, high = -1., 1.
-    n_actions = 2
 
     policy = BetaMLP(
         n_features=env.observation_space.shape[0],
-        n_actions=n_actions,
-        low=low,
-        high=high,
+        n_actions=2,
+        low=-1.,
+        high=1.,
+        d=64,
         actor_lr=1e-3,
         critic_lr=1e-3
     )
@@ -644,31 +651,31 @@ def run_mountain_car_continuous(visualize=False):
     import gymnasium as gym
 
     env = gym.make("MountainCarContinuous-v0", render_mode="human" if visualize else None)
-    low, high = -1., 1.
-    n_actions = 1
+    env._max_episode_steps = 10000
 
     policy = BetaMLP(
         n_features=env.observation_space.shape[0],
-        n_actions=n_actions,
-        low=low,
-        high=high,
+        n_actions=1,
+        low=-1.,
+        high=1.,
+        d=128,
         actor_lr=1e-3,
         critic_lr=1e-3
     )
 
     agent = PPO(
         policy=policy,
-        gamma=0.9,
+        gamma=0.99,
         gae_lambda=0.95,
         ppo_epochs=3,
         batch_size=64,
         vf_weight=0.5,
         entropy_weight=0.01,
         ppo_clip=0.2,
-        vf_clip=100.0
+        vf_clip=1000.0
     )
 
-    run_offline(env, agent, episodes_per_learn=10, max_frames=150_000)
+    run_offline(env, agent, episodes_per_learn=10, max_frames=500_000)
 
 
 def run_acrobot(visualize=False):
@@ -732,4 +739,4 @@ def run_mountain_car(visualize=False):
 
 
 if __name__ == '__main__':
-    run_cart_pole(visualize=False)
+    run_pendulum(visualize=False)
