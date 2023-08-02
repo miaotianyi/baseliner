@@ -58,6 +58,8 @@ def run_offline(env, agent, episodes_per_learn=1000, max_frames=100000):
     plt.scatter(np.arange(len(last_n_rewards)) // episodes_per_learn * episodes_per_learn,
                 last_n_rewards,
                 alpha=0.5)
+    plt.xlabel("Episode")
+    plt.ylabel("Sum of rewards")
     plt.show()
 
 
