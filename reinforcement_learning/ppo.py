@@ -702,6 +702,8 @@ def run_mountain_car(visualize=False):
     import gymnasium as gym
 
     env = gym.make("MountainCar-v0", render_mode="human" if visualize else None)
+    # This episode length is necessary for learning correctly.
+    env._max_episode_steps = 5000
 
     policy = SepCatMLP(
         n_features=env.observation_space.shape[0],
@@ -713,7 +715,7 @@ def run_mountain_car(visualize=False):
 
     agent = PPO(
         policy=policy,
-        gamma=0.99,
+        gamma=1.0,
         gae_lambda=0.95,
         ppo_epochs=3,
         batch_size=64,
@@ -723,7 +725,7 @@ def run_mountain_car(visualize=False):
         vf_clip=10.0
     )
 
-    run_offline(env, agent, episodes_per_learn=5, max_frames=150_000)
+    run_offline(env, agent, episodes_per_learn=5, max_frames=1_000_000)
 
 
 if __name__ == '__main__':
