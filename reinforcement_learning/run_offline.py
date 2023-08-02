@@ -18,7 +18,7 @@ import numpy as np
 
 def run_offline(env, agent, episodes_per_learn=1000, max_frames=100000):
     episode_count = 0
-    last_n_rewards = []
+    episode_returns = []
 
     episodes = []
     obs_list, act_list, reward_list = [], [], []
@@ -42,9 +42,11 @@ def run_offline(env, agent, episodes_per_learn=1000, max_frames=100000):
             episodes.append((obs_list, act_list, reward_list))
             obs_list, act_list, reward_list = [], [], []
             obs, info = env.reset()
-            last_n_rewards.append(total_reward)
-            n = min(30, len(last_n_rewards))
-            avg = sum(last_n_rewards[-n:]) / n
+            episode_returns.append(total_reward)
+
+            n = min(30, len(episode_returns))
+            avg = sum(episode_returns[-n:]) / n
+
             improvement_emoji = "🔥" if (total_reward > avg) else "😢"
             improvement_emoji = f"{episode_count:3} " + improvement_emoji
             print(
@@ -55,9 +57,14 @@ def run_offline(env, agent, episodes_per_learn=1000, max_frames=100000):
                 episodes = []
 
     from matplotlib import pyplot as plt
-    plt.scatter(np.arange(len(last_n_rewards)) // episodes_per_learn * episodes_per_learn,
-                last_n_rewards,
+    plt.scatter(np.arange(len(episode_returns)) // episodes_per_learn * episodes_per_learn,
+                episode_returns,
                 alpha=0.5)
+    # plot average returns for each learning cycle
+    avg_returns = [np.mean(episode_returns[i:i+episodes_per_learn])
+                   for i in range(int(np.ceil(len(episode_returns) // episodes_per_learn)))]
+    plt.plot(np.arange(len(avg_returns)) * episodes_per_learn,
+             avg_returns)
     plt.xlabel("Episode")
     plt.ylabel("Sum of rewards")
     plt.show()
