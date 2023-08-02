@@ -531,11 +531,11 @@ def run_cart_pole(visualize=False):
         gamma=0.99,
         gae_lambda=0.95,
         ppo_epochs=3,
-        batch_size=64,
+        batch_size=128,
         vf_weight=0.5,
         entropy_weight=0.01,
         ppo_clip=0.2,
-        vf_clip=3.0
+        vf_clip=1000.0
     )
 
     run_offline(env, agent, episodes_per_learn=10, max_frames=150_000)
