@@ -254,9 +254,9 @@ class BetaMLP(nn.Module):
         # softplus seems superior for lunar lander
         # Softplus works better for continuous lunar lander,
         # but worse for pendulum (comparing with exp[-200])
-        return F.softplus(reals) + 1.0
+        # return F.softplus(reals) + 1.0
         # return F.elu(reals) + 2.0
-        # return torch.exp(reals) + 1.0
+        return torch.exp(reals) + 1.0
 
     def sample(self, obs):
         # real-valued outputs (to be converted to strictly positive)
@@ -296,54 +296,25 @@ class BetaMLP(nn.Module):
 
 
 class GaussianMLP(nn.Module):
-    def __init__(self, n_features, n_actions, d=64,
-                 # low=None, high=None,
-                 actor_lr=2.5e-4, critic_lr=1e-3, default_lr=1e-3):
+    def __init__(self, n_features, n_actions,
+                 arch=(64, 64),
+                 actor_lr=2.5e-4, critic_lr=1e-3):
         """
         A simple MLP backbone for a PPO agent,
         where the input features are all numerical,
         and the output is a continuous action space.
         """
         super().__init__()
-        # self.low = np.array(low)
-        # self.high = np.array(high)
-        self.d = d
-        self.n_features = n_features
-        self.n_actions = n_actions
-        self.actor_mean = nn.Sequential(
-            nn.Linear(n_features, d),
-            nn.ReLU(),
-            nn.Linear(d, d),
-            nn.ReLU(),
-            nn.Linear(d, n_actions),
-            # Func(lambda x: 2 * torch.tanh(x))
-        )
-        # self.actor_log_std = nn.Parameter(-0.5 * torch.ones(n_actions))
-        self.actor_log_std = nn.Sequential(
-            nn.Linear(n_features, d),
-            nn.ReLU(),
-            nn.Linear(d, d),
-            nn.ReLU(),
-            nn.Linear(d, n_actions),
-        )
-        # nn.init.constant_(self.actor_log_std[-1].bias, -0.5)
-
-        self.critic = nn.Sequential(
-            nn.Linear(n_features, d),
-            nn.ReLU(),
-            nn.Linear(d, d),
-            nn.ReLU(),
-            nn.Linear(d, 1),
-        )
+        self.actor_mean = mlp([n_features] + list(arch) + [n_actions], activation=nn.ReLU)
+        self.actor_log_std = mlp([n_features] + list(arch) + [n_actions], activation=nn.ReLU)
+        self.critic = mlp([n_features] + list(arch) + [1], activation=nn.ReLU)
         self.actor_lr = actor_lr
         self.critic_lr = critic_lr
-        self.default_lr = default_lr
 
     def sample(self, obs):
         # x = self.extractor(obs)
-        x = obs
-        mean = self.actor_mean(x)
-        std = self.actor_log_std(x).exp()
+        mean = self.actor_mean(obs)
+        std = self.actor_log_std(obs).exp()
         dist = torch.distributions.Normal(loc=mean, scale=std)
         action = dist.sample()
         action = action.cpu().numpy()
@@ -353,13 +324,12 @@ class GaussianMLP(nn.Module):
     def score(self, obs, action):
         # intermediate representation
         # x = self.extractor(obs)
-        x = obs
         # critic value for state/observation
-        estimated_value = self.critic(x).flatten()
+        estimated_value = self.critic(obs).flatten()
         # action mean
-        mean = self.actor_mean(x)
+        mean = self.actor_mean(obs)
         # action std
-        std = self.actor_log_std(x).exp()
+        std = self.actor_log_std(obs).exp()
         # action distribution
         dist = torch.distributions.Normal(loc=mean, scale=std)
         # action log probability
@@ -374,7 +344,7 @@ class GaussianMLP(nn.Module):
             {"params": self.actor_mean.parameters(), "lr": self.actor_lr},
             {"params": self.actor_log_std.parameters(), "lr": self.actor_lr},
             {"params": self.critic.parameters(), "lr": self.critic_lr}],
-            lr=self.default_lr, eps=1e-5)
+            eps=1e-5)
         return optimizer
 
 
@@ -590,12 +560,19 @@ def run_pendulum(visualize=False):
 
     env = gym.make("Pendulum-v1", render_mode="human" if visualize else None)
 
-    policy = BetaMLP(
+    # policy = BetaMLP(
+    #     n_features=env.observation_space.shape[0],
+    #     n_actions=1,
+    #     low=-2.,
+    #     high=2.,
+    #     d=128,
+    #     actor_lr=3e-4,
+    #     critic_lr=3e-4
+    # )
+    policy = GaussianMLP(
         n_features=env.observation_space.shape[0],
         n_actions=1,
-        low=-2.,
-        high=2.,
-        d=128,
+        arch=[128, 128],
         actor_lr=3e-4,
         critic_lr=3e-4
     )
