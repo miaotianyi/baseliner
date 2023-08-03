@@ -630,12 +630,19 @@ def run_mountain_car_continuous(visualize=False):
     env = gym.make("MountainCarContinuous-v0", render_mode="human" if visualize else None)
     env._max_episode_steps = 10000
 
-    policy = BetaMLP(
+    # policy = BetaMLP(
+    #     n_features=env.observation_space.shape[0],
+    #     n_actions=1,
+    #     low=-1.,
+    #     high=1.,
+    #     d=128,
+    #     actor_lr=1e-3,
+    #     critic_lr=1e-3
+    # )
+    policy = GaussianMLP(
         n_features=env.observation_space.shape[0],
         n_actions=1,
-        low=-1.,
-        high=1.,
-        d=128,
+        arch=[128]*2,
         actor_lr=1e-3,
         critic_lr=1e-3
     )
@@ -716,4 +723,4 @@ def run_mountain_car(visualize=False):
 
 
 if __name__ == '__main__':
-    run_pendulum(visualize=False)
+    run_mountain_car_continuous(visualize=False)
