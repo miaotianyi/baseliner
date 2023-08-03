@@ -61,8 +61,8 @@ def run_offline(env, agent, episodes_per_learn=1000, max_frames=100000):
                 episode_returns,
                 alpha=0.5)
     # plot average returns for each learning cycle
-    avg_returns = [np.mean(episode_returns[i:i+episodes_per_learn])
-                   for i in range(int(np.ceil(len(episode_returns) // episodes_per_learn)))]
+    avg_returns = [np.mean(episode_returns[i:i + episodes_per_learn])
+                   for i in range(0, len(episode_returns), episodes_per_learn)]
     plt.plot(np.arange(len(avg_returns)) * episodes_per_learn,
              avg_returns)
     plt.xlabel("Episode")
