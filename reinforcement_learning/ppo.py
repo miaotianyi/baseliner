@@ -297,7 +297,7 @@ class BetaMLP(nn.Module):
 
 class GaussianMLP(nn.Module):
     def __init__(self, n_features, n_actions,
-                 arch=(64, 64),
+                 net_arch=(64, 64),
                  actor_lr=2.5e-4, critic_lr=1e-3):
         """
         A simple MLP backbone for a PPO agent,
@@ -305,9 +305,9 @@ class GaussianMLP(nn.Module):
         and the output is a continuous action space.
         """
         super().__init__()
-        self.actor_mean = mlp([n_features] + list(arch) + [n_actions], activation=nn.ReLU)
-        self.actor_log_std = mlp([n_features] + list(arch) + [n_actions], activation=nn.ReLU)
-        self.critic = mlp([n_features] + list(arch) + [1], activation=nn.ReLU)
+        self.actor_mean = mlp([n_features] + list(net_arch) + [n_actions], activation=nn.ReLU)
+        self.actor_log_std = mlp([n_features] + list(net_arch) + [n_actions], activation=nn.ReLU)
+        self.critic = mlp([n_features] + list(net_arch) + [1], activation=nn.ReLU)
         self.actor_lr = actor_lr
         self.critic_lr = critic_lr
 
@@ -333,7 +333,8 @@ class GaussianMLP(nn.Module):
         # action distribution
         dist = torch.distributions.Normal(loc=mean, scale=std)
         # action log probability
-        action_log_prob = dist.log_prob(action).flatten()
+        action_log_prob = dist.log_prob(action).sum(dim=-1)
+
         # action entropy
         entropy = dist.entropy()
         return estimated_value, action_log_prob, entropy
@@ -462,6 +463,10 @@ class PPO:
         all_ret = np.hstack(all_ret)
         all_lp = np.hstack(all_lp)
 
+        # debug tool:
+        # print([x.shape for x in [
+        #     all_obs, all_act, all_val, all_adv, all_ret, all_lp]])
+
         dataset = TensorDataset(*[torch.tensor(x) for x in [
             all_obs, all_act, all_val, all_adv, all_ret, all_lp]])
         return dataset
@@ -560,19 +565,10 @@ def run_pendulum(visualize=False):
 
     env = gym.make("Pendulum-v1", render_mode="human" if visualize else None)
 
-    # policy = BetaMLP(
-    #     n_features=env.observation_space.shape[0],
-    #     n_actions=1,
-    #     low=-2.,
-    #     high=2.,
-    #     d=128,
-    #     actor_lr=3e-4,
-    #     critic_lr=3e-4
-    # )
     policy = GaussianMLP(
         n_features=env.observation_space.shape[0],
         n_actions=1,
-        arch=[128, 128],
+        net_arch=[128, 128],
         actor_lr=3e-4,
         critic_lr=3e-4
     )
@@ -598,12 +594,20 @@ def run_lunar_lander_continuous(visualize=False):
 
     env = gym.make("LunarLander-v2", continuous=True)
 
-    policy = BetaMLP(
+    # policy = BetaMLP(
+    #     n_features=env.observation_space.shape[0],
+    #     n_actions=2,
+    #     low=-1.,
+    #     high=1.,
+    #     d=64,
+    #     actor_lr=1e-3,
+    #     critic_lr=1e-3
+    # )
+    # beta best
+    policy = GaussianMLP(
         n_features=env.observation_space.shape[0],
         n_actions=2,
-        low=-1.,
-        high=1.,
-        d=64,
+        net_arch=[64]*2,
         actor_lr=1e-3,
         critic_lr=1e-3
     )
@@ -630,19 +634,10 @@ def run_mountain_car_continuous(visualize=False):
     env = gym.make("MountainCarContinuous-v0", render_mode="human" if visualize else None)
     env._max_episode_steps = 10000
 
-    # policy = BetaMLP(
-    #     n_features=env.observation_space.shape[0],
-    #     n_actions=1,
-    #     low=-1.,
-    #     high=1.,
-    #     d=128,
-    #     actor_lr=1e-3,
-    #     critic_lr=1e-3
-    # )
     policy = GaussianMLP(
         n_features=env.observation_space.shape[0],
         n_actions=1,
-        arch=[128]*2,
+        net_arch=[128]*2,
         actor_lr=1e-3,
         critic_lr=1e-3
     )
@@ -723,4 +718,4 @@ def run_mountain_car(visualize=False):
 
 
 if __name__ == '__main__':
-    run_mountain_car_continuous(visualize=False)
+    run_cart_pole(visualize=False)
