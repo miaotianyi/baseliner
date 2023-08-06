@@ -863,7 +863,6 @@ def run_bipedal_walker(visualize=False):
         actor_lr=1e-3,
         critic_lr=1e-3
     )
-    # idea: Tanh activation, fixed variance
 
     agent = PPO(
         policy=policy,
@@ -874,7 +873,7 @@ def run_bipedal_walker(visualize=False):
         vf_weight=0.5,
         entropy_weight=0.01,
         ppo_clip=0.2,
-        vf_clip=100.0
+        vf_clip=10.0
     )
 
     run_offline(env, agent, episodes_per_learn=10, max_frames=2_000_000)
