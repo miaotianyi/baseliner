@@ -624,6 +624,15 @@ def run_pendulum(visualize=False):
 
     env = gym.make("Pendulum-v1", render_mode="human" if visualize else None)
 
+    # policy = SepBetaMLP(
+    #     n_features=env.observation_space.shape[0],
+    #     n_actions=1,
+    #     low=-2.0,
+    #     high=2.0,
+    #     net_arch=[128, 128],
+    #     actor_lr=3e-4,
+    #     critic_lr=3e-4
+    # )
     policy = GaussianMLP(
         n_features=env.observation_space.shape[0],
         n_actions=1,
@@ -636,8 +645,8 @@ def run_pendulum(visualize=False):
         policy=policy,
         gamma=0.9,
         gae_lambda=0.95,
-        ppo_epochs=5,
-        batch_size=64,
+        ppo_epochs=3,
+        batch_size=128,
         vf_weight=0.5,
         entropy_weight=0.01,
         ppo_clip=0.2,
@@ -775,5 +784,35 @@ def run_mountain_car(visualize=False):
     run_offline(env, agent, episodes_per_learn=5, max_frames=1_000_000)
 
 
+def run_bipedal_walker(visualize=False):
+    from reinforcement_learning.run_offline import run_offline
+    import gymnasium as gym
+
+    env = gym.make("BipedalWalker-v3", render_mode="human" if visualize else None)
+
+    policy = SepBetaMLP(
+        n_features=env.observation_space.shape[0],
+        n_actions=4,
+        low=-1.0, high=1.0,
+        net_arch=[128]*2,
+        actor_lr=1e-3,
+        critic_lr=1e-3
+    )
+
+    agent = PPO(
+        policy=policy,
+        gamma=0.99,
+        gae_lambda=0.95,
+        ppo_epochs=3,
+        batch_size=128,
+        vf_weight=0.5,
+        entropy_weight=0.01,
+        ppo_clip=0.2,
+        vf_clip=100.0
+    )
+
+    run_offline(env, agent, episodes_per_learn=10, max_frames=2_000_000)
+
+
 if __name__ == '__main__':
-    run_cart_pole(visualize=False)
+    run_bipedal_walker(visualize=False)
