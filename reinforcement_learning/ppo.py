@@ -491,6 +491,7 @@ class PPO:
                  entropy_weight: float,
                  ppo_clip: float,
                  vf_clip: float,
+                 normalize_advantage: bool = True,
                  ):
         # Initialize policy network
         self.policy = policy
@@ -522,6 +523,9 @@ class PPO:
         self.ppo_clip = ppo_clip
         # Clip coefficient for value function loss
         self.vf_clip = vf_clip
+
+        # normalize advantage
+        self.normalize_advantage = normalize_advantage
 
         # Stateful agent: store current observation
         self.current_obs = None
@@ -614,7 +618,8 @@ class PPO:
         for _ in range(self.ppo_epochs):
             for obs, act, val, adv, ret, lp in dataloader:
                 new_val, new_lp, new_ent = self.policy.score(obs, act)
-                adv = (adv - adv.mean()) / adv.std()
+                if self.normalize_advantage:
+                    adv = (adv - adv.mean()) / adv.std()
                 ppo_loss = clipped_ppo_loss(
                     actor_log_probs=new_lp, old_log_probs=lp, old_advantages=adv, clip=self.ppo_clip)
                 vf_loss = clipped_vf_loss(
