@@ -35,11 +35,14 @@ def clipped_ppo_loss(actor_log_probs, old_log_probs, old_advantages, clip):
     scalar
     """
     ratio = torch.exp(actor_log_probs - old_log_probs)
-    clipped_ratio = ratio.clamp(min=1.0 - clip, max=1.0 + clip)
+    # classic policy objective (from PPO paper)
+    # clipped_ratio = ratio.clamp(min=1.0 - clip, max=1.0 + clip)
+    # policy_objective = torch.minimum(ratio * old_advantages, clipped_ratio * old_advantages)
+    # simplified policy objective (from Spinning Up)
+    g = torch.where(old_advantages >= 0, 1 + clip, 1 - clip) * old_advantages
+    policy_objective = torch.minimum(ratio * old_advantages, g)
+
     # objective: bigger is better!
-    policy_objective = torch.minimum(
-        ratio * old_advantages, clipped_ratio * old_advantages
-    )
     return -policy_objective.mean()
 
 
