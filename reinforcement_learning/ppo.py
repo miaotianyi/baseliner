@@ -180,7 +180,7 @@ class Func(nn.Module):
         return self.func(x)
 
 
-def mlp(dims, activation, output_activation=nn.Identity):
+def mlp(dims, activation, output_activation=None):
     """
     Easily initialize an MLP.
 
@@ -188,10 +188,14 @@ def mlp(dims, activation, output_activation=nn.Identity):
     """
     layers = []
     for i in range(len(dims) - 1):
-        act = activation if i < len(dims) - 2 else output_activation
-        layers += [nn.Linear(dims[i], dims[i + 1]), act()]
+        layers.append(nn.Linear(dims[i], dims[i + 1]))
+        if i < len(dims) - 2:
+            layers.append(activation())
+        # act = activation if i < len(dims) - 2 else output_activation
+        # layers += [nn.Linear(dims[i], dims[i + 1]), act()]
+    if output_activation is not None:
+        layers.append(output_activation())
     return nn.Sequential(*layers)
-
 
 class SepCatMLP(nn.Module):
     def __init__(self, n_features, n_actions,
@@ -300,7 +304,7 @@ class SepCatMLP(nn.Module):
 
 class SepBetaMLP(nn.Module):
     def __init__(self, n_features, n_actions,
-                 low=0.0, high=1.0,
+                 low, high,
                  net_arch=(64, 64),
                  actor_lr=2.5e-4, critic_lr=1e-3
                  ):
@@ -356,6 +360,67 @@ class SepBetaMLP(nn.Module):
         optimizer = optim.Adam([
             {"params": self.actor_alpha.parameters(), "lr": self.actor_lr},
             {"params": self.actor_beta.parameters(), "lr": self.actor_lr},
+            {"params": self.critic.parameters(), "lr": self.critic_lr}],
+            eps=1e-5)
+        return optimizer
+
+
+class SqueezeMLP(nn.Module):
+    def __init__(self, n_features, n_actions,
+                 low, high,
+                 net_arch=(64, 64),
+                 actor_lr=2.5e-4, critic_lr=1e-3):
+        super().__init__()
+        self.actor_mean = mlp(
+            [n_features] + list(net_arch) + [n_actions],
+            activation=nn.ReLU, output_activation=nn.Sigmoid)
+        # self.actor_log_std = mlp(
+        #     [n_features] + list(net_arch) + [n_actions],
+        #     activation=nn.ReLU)
+        self.actor_log_std = nn.Parameter(-torch.ones(n_actions))
+        self.critic = mlp([n_features] + list(net_arch) + [1], activation=nn.ReLU)
+        self.actor_lr = actor_lr
+        self.critic_lr = critic_lr
+
+        self.low = low
+        self.range = high - low
+
+    def sample(self, obs):
+        # x = self.extractor(obs)
+        mean = self.actor_mean(obs)
+        # std = self.actor_log_std(obs).exp()
+        std = self.actor_log_std.exp()
+        dist = torch.distributions.Normal(loc=mean, scale=std)
+        action = dist.sample()
+        action = action.cpu().numpy()
+        action = action * self.range + self.low     # special for squeezed
+        return action
+
+    def score(self, obs, action):
+        # intermediate representation
+        # x = self.extractor(obs)
+        # critic value for state/observation
+        estimated_value = self.critic(obs).flatten()
+        # action mean
+        mean = self.actor_mean(obs)
+        # action std
+        # std = self.actor_log_std(obs).exp()
+        std = self.actor_log_std.exp()
+        # action distribution
+        dist = torch.distributions.Normal(loc=mean, scale=std)
+        # action log probability
+        action = (action - self.low) / self.range   # special for squeezed
+        action_log_prob = dist.log_prob(action).sum(dim=-1)
+
+        # action entropy
+        entropy = dist.entropy()
+        return estimated_value, action_log_prob, entropy
+
+    def make_optimizer(self):
+        optimizer = optim.Adam([
+            {"params": self.actor_mean.parameters(), "lr": self.actor_lr},
+            # {"params": self.actor_log_std.parameters(), "lr": self.actor_lr},
+            {"params": self.actor_log_std, "lr": self.actor_lr},
             {"params": self.critic.parameters(), "lr": self.critic_lr}],
             eps=1e-5)
         return optimizer
@@ -790,14 +855,15 @@ def run_bipedal_walker(visualize=False):
 
     env = gym.make("BipedalWalker-v3", render_mode="human" if visualize else None)
 
-    policy = SepBetaMLP(
+    policy = SqueezeMLP(
         n_features=env.observation_space.shape[0],
         n_actions=4,
         low=-1.0, high=1.0,
-        net_arch=[128]*2,
+        net_arch=[128]*3,
         actor_lr=1e-3,
         critic_lr=1e-3
     )
+    # idea: Tanh activation, fixed variance
 
     agent = PPO(
         policy=policy,
