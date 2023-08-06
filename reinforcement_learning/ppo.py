@@ -235,15 +235,79 @@ class SepCatMLP(nn.Module):
         return optimizer
 
 
-class BetaMLP(nn.Module):
+# class BetaMLP(nn.Module):
+#     def __init__(self, n_features, n_actions,
+#                  low=0.0, high=1.0,
+#                  d=64,
+#                  actor_lr=2.5e-4, critic_lr=1e-3
+#                  ):
+#         super().__init__()
+#         self.actor = mlp([n_features] + [d] * 2 + [n_actions * 2], activation=nn.ReLU)
+#         self.critic = mlp([n_features] + [d] * 2 + [1], activation=nn.ReLU)
+#
+#         self.low = low
+#         self.range = high - low
+#         self.actor_lr = actor_lr
+#         self.critic_lr = critic_lr
+#
+#     @staticmethod
+#     def real_to_positive(reals):
+#         # softplus result: around 250 running mean
+#         # exp result: around 170 running mean
+#         # softplus seems superior for lunar lander
+#         # Softplus works better for continuous lunar lander,
+#         # but worse for pendulum (comparing with exp[-200])
+#         # return F.softplus(reals) + 1.0
+#         # return F.elu(reals) + 2.0
+#         return torch.exp(reals) + 1.0
+#
+#     def sample(self, obs):
+#         # real-valued outputs (to be converted to strictly positive)
+#         reals = self.actor(obs)
+#         positive = self.real_to_positive(reals)
+#         alpha, beta = torch.chunk(positive, chunks=2, dim=-1)
+#         dist = torch.distributions.Beta(concentration1=alpha, concentration0=beta)
+#         action = dist.sample()
+#         action = action.cpu().numpy()
+#         action = action * self.range + self.low
+#         return action
+#
+#     def score(self, obs, action):
+#         # intermediate representation
+#         # critic value for state/observation
+#         estimated_value = self.critic(obs).flatten()
+#
+#         # action distribution
+#         reals = self.actor(obs)
+#         positive = self.real_to_positive(reals)
+#         alpha, beta = torch.chunk(positive, chunks=2, dim=-1)
+#         dist = torch.distributions.Beta(concentration1=alpha, concentration0=beta)
+#
+#         # action log probability
+#         action = (action - self.low) / self.range   # squeeze back to [0, 1]
+#         action_log_prob = dist.log_prob(action).sum(dim=-1)
+#         # action entropy
+#         entropy = dist.entropy()
+#         return estimated_value, action_log_prob, entropy
+#
+#     def make_optimizer(self):
+#         optimizer = optim.Adam([
+#             {"params": self.actor.parameters(), "lr": self.actor_lr},
+#             {"params": self.critic.parameters(), "lr": self.critic_lr}],
+#             eps=1e-5)
+#         return optimizer
+
+
+class SepBetaMLP(nn.Module):
     def __init__(self, n_features, n_actions,
                  low=0.0, high=1.0,
-                 d=64,
+                 net_arch=(64, 64),
                  actor_lr=2.5e-4, critic_lr=1e-3
                  ):
         super().__init__()
-        self.actor = mlp([n_features] + [d] * 2 + [n_actions * 2], activation=nn.ReLU)
-        self.critic = mlp([n_features] + [d] * 2 + [1], activation=nn.ReLU)
+        self.actor_alpha = mlp([n_features] + list(net_arch) + [n_actions], activation=nn.ReLU)
+        self.actor_beta = mlp([n_features] + list(net_arch) + [n_actions], activation=nn.ReLU)
+        self.critic = mlp([n_features] + list(net_arch) + [1], activation=nn.ReLU)
 
         self.low = low
         self.range = high - low
@@ -257,15 +321,14 @@ class BetaMLP(nn.Module):
         # softplus seems superior for lunar lander
         # Softplus works better for continuous lunar lander,
         # but worse for pendulum (comparing with exp[-200])
-        # return F.softplus(reals) + 1.0
+        return F.softplus(reals) + 1.0
         # return F.elu(reals) + 2.0
-        return torch.exp(reals) + 1.0
+        # return torch.exp(reals) + 1.0
 
     def sample(self, obs):
         # real-valued outputs (to be converted to strictly positive)
-        reals = self.actor(obs)
-        positive = self.real_to_positive(reals)
-        alpha, beta = torch.chunk(positive, chunks=2, dim=-1)
+        alpha = self.real_to_positive(self.actor_alpha(obs))
+        beta = self.real_to_positive(self.actor_beta(obs))
         dist = torch.distributions.Beta(concentration1=alpha, concentration0=beta)
         action = dist.sample()
         action = action.cpu().numpy()
@@ -278,9 +341,8 @@ class BetaMLP(nn.Module):
         estimated_value = self.critic(obs).flatten()
 
         # action distribution
-        reals = self.actor(obs)
-        positive = self.real_to_positive(reals)
-        alpha, beta = torch.chunk(positive, chunks=2, dim=-1)
+        alpha = self.real_to_positive(self.actor_alpha(obs))
+        beta = self.real_to_positive(self.actor_beta(obs))
         dist = torch.distributions.Beta(concentration1=alpha, concentration0=beta)
 
         # action log probability
@@ -292,7 +354,8 @@ class BetaMLP(nn.Module):
 
     def make_optimizer(self):
         optimizer = optim.Adam([
-            {"params": self.actor.parameters(), "lr": self.actor_lr},
+            {"params": self.actor_alpha.parameters(), "lr": self.actor_lr},
+            {"params": self.actor_beta.parameters(), "lr": self.actor_lr},
             {"params": self.critic.parameters(), "lr": self.critic_lr}],
             eps=1e-5)
         return optimizer
@@ -534,13 +597,6 @@ def run_lunar_lander(visualize=False):
 
     env = gym.make("LunarLander-v2", render_mode="human" if visualize else None)
 
-    # policy = CatPolicyMLP(
-    #     n_features=env.observation_space.shape[0],
-    #     n_actions=env.action_space.n,
-    #     d=64,
-    #     actor_lr=1e-3,
-    #     critic_lr=1e-3,
-    #     default_lr=1e-3)
     policy = SepCatMLP(
         n_features=env.observation_space.shape[0],
         n_actions=env.action_space.n,
@@ -597,37 +653,36 @@ def run_lunar_lander_continuous(visualize=False):
 
     env = gym.make("LunarLander-v2", continuous=True)
 
-    # policy = BetaMLP(
-    #     n_features=env.observation_space.shape[0],
-    #     n_actions=2,
-    #     low=-1.,
-    #     high=1.,
-    #     d=64,
-    #     actor_lr=1e-3,
-    #     critic_lr=1e-3
-    # )
-    # beta best
-    policy = GaussianMLP(
+    policy = SepBetaMLP(
         n_features=env.observation_space.shape[0],
         n_actions=2,
-        net_arch=[64]*2,
+        low=-1.,
+        high=1.,
+        net_arch=[128]*2,
         actor_lr=1e-3,
         critic_lr=1e-3
     )
+    # policy = GaussianMLP(
+    #     n_features=env.observation_space.shape[0],
+    #     n_actions=2,
+    #     net_arch=[128]*2,
+    #     actor_lr=1e-3,
+    #     critic_lr=1e-3
+    # )
 
     agent = PPO(
         policy=policy,
         gamma=0.99,
         gae_lambda=0.95,
         ppo_epochs=3,
-        batch_size=64,
+        batch_size=128,
         vf_weight=0.5,
         entropy_weight=0.01,
         ppo_clip=0.2,
-        vf_clip=100.0
+        vf_clip=10.0
     )
 
-    run_offline(env, agent, episodes_per_learn=5, max_frames=500_000)
+    run_offline(env, agent, episodes_per_learn=10, max_frames=1_000_000)
 
 
 def run_mountain_car_continuous(visualize=False):
