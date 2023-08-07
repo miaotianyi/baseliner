@@ -865,8 +865,8 @@ def run_bipedal_walker(visualize=False):
         n_actions=4,
         low=-1.0, high=1.0,
         net_arch=[128]*3,
-        actor_lr=1e-3,
-        critic_lr=1e-3
+        actor_lr=3e-4,
+        critic_lr=3e-4
     )
 
     agent = PPO(
@@ -881,7 +881,7 @@ def run_bipedal_walker(visualize=False):
         vf_clip=10.0
     )
 
-    run_offline(env, agent, episodes_per_learn=10, max_frames=2_000_000)
+    run_offline(env, agent, episodes_per_learn=10, max_frames=3_000_000)
 
 
 if __name__ == '__main__':
